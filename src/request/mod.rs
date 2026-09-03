@@ -98,9 +98,10 @@ impl Request {
             i += 1;
         }
         self.headers = Headers {
-            content_length: headers
-                .remove("Content-Length")
-                .map(|h| h.parse::<u64>().expect("msg")),
+            content_length: headers.remove("Content-Length").map(|h| {
+                h.parse::<u64>()
+                    .expect("Error parsing Content-Length header")
+            }),
             content_type: headers.remove("Content-Type"),
             accept: headers.remove("Accept"),
             host: headers.remove("Host"),
