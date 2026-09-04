@@ -14,9 +14,8 @@ fn main() {
                 match stream {
                     Err(e) => println!("Error with stream: {:?}", e),
                     Ok(s) => {
-                        let mut request = Request::new(s);
-                        request.set_headers();
-                        println!("{:?}", request.headers);
+                        let request = Request::from_stream(s);
+                        println!("{:?}", String::from_utf8(request.body.expect("ERROR")))
                     }
                 }
             }
