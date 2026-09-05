@@ -15,7 +15,8 @@ fn main() {
                     Err(e) => println!("Error with stream: {:?}", e),
                     Ok(s) => {
                         let request = Request::from_stream(s);
-                        println!("{:?}", String::from_utf8(request.body.expect("ERROR")))
+                        println!("{:#?}", request.headers);
+                        println!("{:#?}", String::from_utf8(request.body));
                     }
                 }
             }
