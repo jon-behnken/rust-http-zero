@@ -14,6 +14,7 @@ pub struct Headers {
 
 pub struct Request {
     stream: TcpStream,
+    pub request_target: String,
     pub headers: Headers,
     pub method: String,
     pub body: Vec<u8>,
@@ -29,6 +30,10 @@ impl Request {
     */
     pub fn from_stream(stream: TcpStream) -> Self {
         Request::consume(stream)
+    }
+
+    pub fn stream_ref(&mut self) -> &mut TcpStream {
+        &mut self.stream
     }
 
     /*
@@ -86,27 +91,55 @@ impl Request {
         let mut header_key: Vec<u8> = vec![];
         let mut header_value: Vec<u8> = vec![];
 
-        let mut write_to_http_method = true;
+        let mut reading_http_request_line = true;
+        let mut request_line_delimiter_count: usize = 0;
 
         // Advance to the next key-value pair in headers
         let mut write_to_header_value = false;
 
         let mut method: Vec<u8> = vec![];
+        let mut request_target: Vec<u8> = vec![];
+        let mut version: Vec<u8> = vec![];
+
         let mut i: usize = 0;
         while i < headers_buffer.len() - 2 {
-            if &headers_buffer[i..i + 2] == b" /" {
-                write_to_http_method = false;
+            let advance_pointer = &headers_buffer[i..i + 2] == b"\r\n";
+
+            // Finished reading request line
+            if advance_pointer && reading_http_request_line {
+                reading_http_request_line = false;
                 i += 2;
                 continue;
             }
 
-            if write_to_http_method {
-                method.push(headers_buffer[i]);
-                i += 1;
-                continue;
-            };
+            if reading_http_request_line {
+                let record_http_method = request_line_delimiter_count == 0;
+                let record_request_target = request_line_delimiter_count == 1;
+                let record_http_version = request_line_delimiter_count == 2;
 
-            let advance_header = &headers_buffer[i..i + 2] == b"\r\n";
+                if headers_buffer[i] == b' ' {
+                    request_line_delimiter_count += 1;
+                    i += 1;
+                    continue;
+                }
+                if record_http_method {
+                    method.push(headers_buffer[i]);
+                    i += 1;
+                    continue;
+                };
+
+                if record_request_target {
+                    request_target.push(headers_buffer[i]);
+                    i += 1;
+                    continue;
+                }
+
+                if record_http_version {
+                    version.push(headers_buffer[i]);
+                    i += 1;
+                    continue;
+                }
+            }
 
             // Transition to writing the header's value
             // Skip 2 bytes to exclude ': '
@@ -119,7 +152,7 @@ impl Request {
             // Insert current header key and value
             // Clear the buffer variables
             // Skip 2 bytes to exclude '\r\n'
-            if advance_header {
+            if advance_pointer {
                 headers.insert(
                     String::from_utf8(header_key.clone()).unwrap(),
                     String::from_utf8(header_value.clone()).unwrap(),
@@ -155,8 +188,10 @@ impl Request {
 
         Request {
             stream,
+            request_target: String::from_utf8(request_target)
+                .expect("Error converting request_target to UTF-8"),
             headers,
-            method: String::from_utf8(method).expect("Error parsing HTTP method"),
+            method: String::from_utf8(method).expect("Error converting HTTP method to UTF-8"),
             body: body_buffer,
         }
     }

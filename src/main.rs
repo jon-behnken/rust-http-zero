@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::TcpListener;
 
 use crate::request::Request;
@@ -14,9 +15,15 @@ fn main() {
                 match stream {
                     Err(e) => println!("Error with stream: {:?}", e),
                     Ok(s) => {
-                        let request = Request::from_stream(s);
-                        println!("{:#?}", request.headers);
-                        println!("{:#?}", String::from_utf8(request.body));
+                        let mut request = Request::from_stream(s);
+                        println!("{}", request.request_target);
+                        request
+                            .stream_ref()
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nDate: Sat, 05 Sep 2026 19:10:00 GMT\r\n\r\n<!DOCTYPE html><html><body>Hi</body></html>
+",
+                            )
+                            .expect("test");
                     }
                 }
             }
