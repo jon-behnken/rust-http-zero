@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::io::Read;
-mod tests;
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Headers {
+    pub accept: Option<String>,
     pub authorization: Option<String>,
     pub content_length: Option<u64>,
     pub content_type: Option<String>,
-    pub accept: Option<String>,
     pub host: Option<String>,
     pub user_agent: Option<String>,
 }
@@ -225,5 +225,89 @@ impl<T: Read> Request<T> {
             }
         }
         request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod fixtures {
+        pub fn create_stream(desired_header_size: Option<usize>) -> String {
+            let accept = "text/html,application/xhtml+xml,application/xml;q=0.9,/;q=0.8";
+            let authorization = "Basic dXNlcjpwYXNz";
+            let content_length = 0u64;
+            let content_type = "text/html";
+            let host = "example.com";
+            let user_agent = "ExampleBrowser/1.0";
+
+            let headers = format!(
+                "GET /path?foo=bar HTTP/1.1\r\n\
+     Host: {}\r\n\
+     Accept: {}\r\n\
+     Authorization: {}\r\n\
+     Content-Length: {}\r\n\
+     Content-Type: {}\r\n\
+     User-Agent: {}\r\n",
+                host, accept, authorization, content_length, content_type, user_agent,
+            );
+
+            match desired_header_size {
+                Some(desired_header_size) => {
+                    return format!(
+                        "{}X-Pad: {}\r\n\r\n{}",
+                        headers,
+                        "A".repeat(desired_header_size - headers.len() - "X-Pad: ".len()),
+                        "BODY_START"
+                    );
+                }
+                None => {
+                    return format!("{}\r\nBODY_START", headers);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn it_parses_request_line_and_header_fields() {
+        let stream = fixtures::create_stream(None);
+
+        let request = Request::from_stream(stream.as_bytes());
+        let headers = request.headers;
+
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.request_target, "/path?foo=bar");
+        assert_eq!(headers.host.unwrap(), "example.com");
+        assert_eq!(
+            headers.accept.unwrap(),
+            "text/html,application/xhtml+xml,application/xml;q=0.9,/;q=0.8"
+        );
+        assert_eq!(headers.user_agent.unwrap(), "ExampleBrowser/1.0");
+        assert_eq!(headers.authorization.unwrap(), "Basic dXNlcjpwYXNz");
+        assert_eq!(request.body, b"BODY_START");
+    }
+
+    /*
+        Tests a scenario when the HTTP_HEADER_TERMINATOR arrives in sequential reads;
+        creates a stream with a header that is 510 bytes in size, and results in \r\n\r\n
+        being split across two reads
+    */
+    #[test]
+    fn it_handles_sequential_reads() {
+        let stream = fixtures::create_stream(Some(510));
+        let request = Request::from_stream(stream.as_bytes());
+        let headers = request.headers;
+        println!("{:?}", headers);
+
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.request_target, "/path?foo=bar");
+        assert_eq!(headers.host.unwrap(), "example.com");
+        assert_eq!(
+            headers.accept.unwrap(),
+            "text/html,application/xhtml+xml,application/xml;q=0.9,/;q=0.8"
+        );
+        assert_eq!(headers.user_agent.unwrap(), "ExampleBrowser/1.0");
+        assert_eq!(headers.authorization.unwrap(), "Basic dXNlcjpwYXNz");
+        assert_eq!(request.body, b"BODY_START");
     }
 }
