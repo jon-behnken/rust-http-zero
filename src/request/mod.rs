@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::TcpStream;
+mod tests;
 
 #[derive(Debug, Clone)]
 pub struct Headers {
@@ -12,8 +12,8 @@ pub struct Headers {
     pub user_agent: Option<String>,
 }
 
-pub struct Request {
-    stream: TcpStream,
+pub struct Request<T: Read> {
+    stream: T,
     pub request_target: String,
     pub headers: Headers,
     pub method: String,
@@ -22,17 +22,17 @@ pub struct Request {
 
 const HTTP_HEADER_TERMINATOR: &[u8; 4] = b"\r\n\r\n";
 
-impl Request {
+impl<T: Read> Request<T> {
     /*
        from_stream is the public constructor; it takes a TcpStream
        and calls consume() which reads bytes off the stream and
        parses them into headers, method and body
     */
-    pub fn from_stream(stream: TcpStream) -> Self {
+    pub fn from_stream(stream: T) -> Self {
         Request::consume(stream)
     }
 
-    pub fn stream_ref(&mut self) -> &mut TcpStream {
+    pub fn stream_ref(&mut self) -> &mut T {
         &mut self.stream
     }
 
@@ -40,7 +40,7 @@ impl Request {
        new() is a private constructor that reads the full HTTP headers
        into a buffer, as well as any residual bytes that belong to the body.
     */
-    fn new(mut stream: TcpStream) -> Request {
+    fn new(mut stream: T) -> Request<T> {
         // Stores all bytes that belong to the header
         let mut headers_buffer: Vec<u8> = vec![];
 
@@ -196,7 +196,7 @@ impl Request {
         }
     }
 
-    fn consume(stream: TcpStream) -> Self {
+    fn consume(stream: T) -> Self {
         let mut request = Request::new(stream);
 
         if request.method == "GET" {
