@@ -11,7 +11,6 @@ pub struct Headers {
     pub host: Option<String>,
     pub user_agent: Option<String>,
 }
-
 pub struct Request<T: Read> {
     stream: T,
     pub request_target: String,
@@ -62,6 +61,7 @@ impl<T: Read> Request<T> {
                 Err(e) => println!("Error reading into buffer: {:?}", e),
                 Ok(bytes_read) => {
                     // The stream may end up containing less bytes than we've allocated for the buffer.
+         
                     // To ensure we only write valid data, slice the buffer from beginning to the last valid byte.
                     let bytes = &buf[0..bytes_read];
                     headers_buffer.extend(bytes);
@@ -297,8 +297,7 @@ mod tests {
         let stream = fixtures::create_stream(Some(510));
         let request = Request::from_stream(stream.as_bytes());
         let headers = request.headers;
-        println!("{:?}", headers);
-
+        
         assert_eq!(request.method, "GET");
         assert_eq!(request.request_target, "/path?foo=bar");
         assert_eq!(headers.host.unwrap(), "example.com");
