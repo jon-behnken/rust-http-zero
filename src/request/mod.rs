@@ -11,6 +11,8 @@ pub struct Headers {
     pub host: Option<String>,
     pub user_agent: Option<String>,
 }
+
+#[allow(unused)]
 pub struct Request<T: Read> {
     stream: T,
     pub request_target: String,

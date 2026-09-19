@@ -10,24 +10,13 @@ mod request;
 /*
 RequestHandler is a handler function wrapped in an atomic reference counter.
 
-The atomic reference counter allows a reference to the handler to be safely
-shared across threads; the difference between Rc and Arc is that an Arc
-guarantees that the read and write operations to the reference count are
-done atomically.
+An Arc guarantees that the read and write operations to the reference count
+are done atomically, thus its safe to share across threads.
 */
 type RequestHandler = Arc<dyn Fn(TcpStream) + Send + Sync>;
 
 fn request_handler(stream: TcpStream) {
-    /*
-    spawn() accepts a closure, which is an anonymous function that has
-    access to variables in the enclosing scope. To avoid dangling references,
-    Rust normally requires you to `move` values into the closure.
-
-    However, in this case, the `move` keyword is not necessary because
-    the closure fully consumes `stream`.
-     */
     let mut request = Request::from_stream(stream);
-    println!("{}", request.request_target);
     request
         .stream_ref()
         .write_all(
@@ -50,7 +39,9 @@ fn start_tcp_listener(handler: RequestHandler, sender: Option<Sender<()>>, port:
                 match stream {
                     Err(e) => println!("Error with stream: {:?}", e),
                     Ok(stream) => {
-                        let clone = handler.clone();
+                        let clone: Arc<dyn Fn(TcpStream) + Send + Sync> = handler.clone();
+                        // thread::spawn requires ownership but the closure doesn't know that.
+                        // We need to explicitly specify `move` capture mode
                         thread::spawn(move || clone(stream));
                     }
                 }
@@ -124,13 +115,9 @@ mod test {
                 thread::spawn(send_request(sender));
                 thread::spawn(send_request(sender_clone));
 
-                match receiver.recv() {
-                    Err(e) => println!("Error receiving request sent signal: {:?}", e),
-                    Ok(_) => {
-                        let duration = start.elapsed();
-                        assert!(duration.as_millis() < EXPECTED_DURATION_THRESHOLD_MS.into());
-                    }
-                }
+                receiver.recv().and_then(|_| receiver.recv()).unwrap();
+                let duration = start.elapsed();
+                assert!(duration.as_millis() < EXPECTED_DURATION_THRESHOLD_MS.into());
             }
         }
     }
