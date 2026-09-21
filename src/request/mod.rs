@@ -1,5 +1,37 @@
 use std::collections::HashMap;
 use std::io::Read;
+use std::str::{FromStr, from_utf8};
+
+#[allow(unused)]
+#[derive(Debug)]
+pub struct RequestError {
+    status_code: u16,
+    message: String
+}
+
+#[derive(PartialEq, Debug)] // WHY?
+pub enum HttpMethod {
+  Get,
+  Options,
+  Post,
+  Put,
+  Patch
+}
+
+impl FromStr for HttpMethod {
+  type Err = String;
+
+  fn from_str(input: &str) -> Result<Self, Self::Err> {
+      match input {
+        "GET" => Ok(HttpMethod::Get),
+        "OPTIONS" => Ok(HttpMethod::Options),
+        "POST" => Ok(HttpMethod::Post),
+        "PUT" => Ok(HttpMethod::Put),
+        "PATCH" => Ok(HttpMethod::Patch),
+        _ => Err(format!("Unknown HTTP method encountered: {}", input))
+      }
+  }
+}
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -17,7 +49,7 @@ pub struct Request<T: Read> {
     stream: T,
     pub request_target: String,
     pub headers: Headers,
-    pub method: String,
+    pub method: HttpMethod,
     pub body: Vec<u8>,
 }
 
@@ -29,7 +61,7 @@ impl<T: Read> Request<T> {
        and calls consume() which reads bytes off the stream and
        parses them into headers, method and body
     */
-    pub fn from_stream(stream: T) -> Self {
+    pub fn from_stream(stream: T) -> Result<Self, RequestError> {
         Request::consume(stream)
     }
 
@@ -156,8 +188,8 @@ impl<T: Read> Request<T> {
             // Skip 2 bytes to exclude '\r\n'
             if advance_pointer {
                 headers.insert(
-                    String::from_utf8(header_key.clone()).unwrap(),
-                    String::from_utf8(header_value.clone()).unwrap(),
+                    String::from_utf8(header_key.clone()).unwrap(), // FIXME error_handling
+                    String::from_utf8(header_value.clone()).unwrap(), // FIXME error_handling
                 );
 
                 header_key.clear();
@@ -180,7 +212,7 @@ impl<T: Read> Request<T> {
             authorization: headers.remove("Authorization"),
             content_length: headers.remove("Content-Length").map(|h| {
                 h.parse::<u64>()
-                    .expect("Error parsing Content-Length header")
+                    .expect("Error parsing Content-Length header") // FIXME error_handling
             }),
             content_type: headers.remove("Content-Type"),
             accept: headers.remove("Accept"),
@@ -191,18 +223,18 @@ impl<T: Read> Request<T> {
         Request {
             stream,
             request_target: String::from_utf8(request_target)
-                .expect("Error converting request_target to UTF-8"),
+                .expect("Error converting request_target to UTF-8"), // FIXME error_handling
             headers,
-            method: String::from_utf8(method).expect("Error converting HTTP method to UTF-8"),
+            method: HttpMethod::from_str(from_utf8(&method).expect("HTTP method is not a valid UTF-8 string.")).unwrap(), // FIXME error_handling
             body: body_buffer,
         }
     }
 
-    fn consume(stream: T) -> Self {
+    fn consume(stream: T) -> Result<Self, RequestError> {
         let mut request = Request::new(stream);
 
-        if request.method == "GET" {
-            return request;
+        if request.method == HttpMethod::Get {
+            return Ok(request);
         };
 
         // read() doesn't return until an EOF signal is read; HTTP requests don't send EOF
@@ -214,11 +246,11 @@ impl<T: Read> Request<T> {
                 .content_length
                 .expect("Empty content length")
                 .try_into()
-                .expect("Error converting content-length to u64")
+                .expect("Error converting content-length to u64") // FIXME error_handling
         {
             let mut buf: [u8; 512] = [0; 512];
             match request.stream.read(&mut buf) {
-                Err(e) => println!("Error reading stream body: {:?}", e),
+                Err(e) => { return Err(RequestError { status_code: 500, message: format!("Error reading request body: {}", e)}) },
                 Ok(bytes_read) => {
                     let bytes = &buf[0..bytes_read];
                     request.body.extend(bytes);
@@ -226,7 +258,7 @@ impl<T: Read> Request<T> {
                 }
             }
         }
-        request
+        Ok(request)
     }
 }
 
@@ -274,10 +306,10 @@ mod tests {
     fn it_parses_request_line_and_header_fields() {
         let stream = fixtures::create_stream(None);
 
-        let request = Request::from_stream(stream.as_bytes());
+        let request = Request::from_stream(stream.as_bytes()).unwrap();
         let headers = request.headers;
 
-        assert_eq!(request.method, "GET");
+        assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.request_target, "/path?foo=bar");
         assert_eq!(headers.host.unwrap(), "example.com");
         assert_eq!(
@@ -297,10 +329,10 @@ mod tests {
     #[test]
     fn it_handles_sequential_reads() {
         let stream = fixtures::create_stream(Some(510));
-        let request = Request::from_stream(stream.as_bytes());
+        let request = Request::from_stream(stream.as_bytes()).unwrap();
         let headers = request.headers;
         
-        assert_eq!(request.method, "GET");
+        assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.request_target, "/path?foo=bar");
         assert_eq!(headers.host.unwrap(), "example.com");
         assert_eq!(

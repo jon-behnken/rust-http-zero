@@ -6,6 +6,7 @@ use std::thread;
 use crate::request::Request;
 
 mod request;
+mod router;
 
 /*
 RequestHandler is a handler function wrapped in an atomic reference counter.
@@ -16,7 +17,7 @@ are done atomically, thus its safe to share across threads.
 type RequestHandler = Arc<dyn Fn(TcpStream) + Send + Sync>;
 
 fn request_handler(stream: TcpStream) {
-    let mut request = Request::from_stream(stream);
+    let mut request = Request::from_stream(stream).unwrap();
     request
         .stream_ref()
         .write_all(
