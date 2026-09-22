@@ -9,7 +9,7 @@ pub struct RequestError {
     message: String
 }
 
-#[derive(PartialEq, Debug)] // WHY?
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum HttpMethod {
   Get,
   Options,

@@ -4,6 +4,7 @@ use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 
 use crate::request::Request;
+use crate::router::Router;
 
 mod request;
 mod router;
@@ -15,16 +16,6 @@ An Arc guarantees that the read and write operations to the reference count
 are done atomically, thus its safe to share across threads.
 */
 type RequestHandler = Arc<dyn Fn(TcpStream) + Send + Sync>;
-
-fn request_handler(stream: TcpStream) {
-    let mut request = Request::from_stream(stream).unwrap();
-    request
-        .stream_ref()
-        .write_all(
-            b"HTTP/1.1 200 OK\r\nDate: Sat, 05 Sep 2026 19:10:00 GMT\r\n\r\n<!DOCTYPE html><html><body>Hi</body></html>",
-        )
-        .expect("{WIP}") // FIXME
-}
 
 fn start_tcp_listener(handler: RequestHandler, sender: Option<Sender<()>>, port: u16) {
     match TcpListener::bind(format!("127.0.0.1:{port}")) {
@@ -52,7 +43,37 @@ fn start_tcp_listener(handler: RequestHandler, sender: Option<Sender<()>>, port:
 }
 
 fn main() {
-    start_tcp_listener(Arc::new(request_handler), None, 6403);
+    // Instantiate router and register route handlers
+    let mut router = Router::new();
+    router.get(
+        "/foo".to_string(),
+        Box::new(|mut request| {
+            request.stream_ref().write_all(b"HTTP/1.1 200 OK\r\nDate: Sat, 05 Sep 2026 19:10:00 GMT\r\n\r\n<!DOCTYPE html><html><body>Foo</body></html>").unwrap();
+        }),
+    );
+    router.get(
+        "/bar".to_string(),
+        Box::new(|mut request| {
+            request.stream_ref().write_all(b"HTTP/1.1 200 OK\r\nDate: Sat, 05 Sep 2026 19:10:00 GMT\r\n\r\n<!DOCTYPE html><html><body>Bar</body></html>").unwrap();
+        }),
+    );
+
+    // Move Router into a heap allocation with reference counter
+    let threaded_router = Arc::new(router);
+    start_tcp_listener(
+        Arc::new(move |stream: TcpStream| {
+            let request = Request::from_stream(stream).unwrap(); // FIXME error_handling
+            println!("{:?}", request.method.clone());
+            println!("{:?}", request.request_target.clone());
+            let handle = threaded_router
+                .registry
+                .get(&(request.method.clone(), request.request_target.clone())) // WHY &?
+                .unwrap();  // FIXME error_handling
+            handle(request);
+        }),
+        None,
+        6403,
+    );
 }
 
 #[cfg(test)]
@@ -76,7 +97,7 @@ mod test {
     }
 
     #[test]
-    fn it_handles_requests_in_threads() {
+    fn it_handles_requests_concurrently() {
         let (sender, receiver) = channel::<()>();
 
         thread::spawn(|| {
