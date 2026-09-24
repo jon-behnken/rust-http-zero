@@ -2,35 +2,15 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::str::{FromStr, from_utf8};
 
+pub mod http_method;
+
+use http_method::HttpMethod;
+
 #[allow(unused)]
 #[derive(Debug)]
 pub struct RequestError {
     status_code: u16,
-    message: String
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum HttpMethod {
-  Get,
-  Options,
-  Post,
-  Put,
-  Patch
-}
-
-impl FromStr for HttpMethod {
-  type Err = String;
-
-  fn from_str(input: &str) -> Result<Self, Self::Err> {
-      match input {
-        "GET" => Ok(HttpMethod::Get),
-        "OPTIONS" => Ok(HttpMethod::Options),
-        "POST" => Ok(HttpMethod::Post),
-        "PUT" => Ok(HttpMethod::Put),
-        "PATCH" => Ok(HttpMethod::Patch),
-        _ => Err(format!("Unknown HTTP method encountered: {}", input))
-      }
-  }
+    message: String,
 }
 
 #[allow(unused)]
@@ -47,14 +27,15 @@ pub struct Headers {
 #[allow(unused)]
 pub struct Request<T: Read> {
     stream: T,
-    pub request_target: String,
-    pub headers: Headers,
-    pub method: HttpMethod,
-    pub body: Vec<u8>,
+    request_target: String,
+    headers: Headers,
+    method: HttpMethod,
+    body: Vec<u8>,
 }
 
 const HTTP_HEADER_TERMINATOR: &[u8; 4] = b"\r\n\r\n";
 
+#[allow(unused)]
 impl<T: Read> Request<T> {
     /*
        from_stream is the public constructor; it takes a TcpStream
@@ -67,6 +48,22 @@ impl<T: Read> Request<T> {
 
     pub fn stream_ref(&mut self) -> &mut T {
         &mut self.stream
+    }
+
+    pub fn request_target(&self) -> &str {
+        &self.request_target
+    }
+
+    pub fn headers(&self) -> &Headers {
+        &self.headers
+    }
+
+    pub fn method(&self) -> &HttpMethod {
+        &self.method
+    }
+
+    pub fn body(&self) -> &Vec<u8> {
+        &self.body
     }
 
     /*
@@ -95,7 +92,7 @@ impl<T: Read> Request<T> {
                 Err(e) => println!("Error reading into buffer: {:?}", e),
                 Ok(bytes_read) => {
                     // The stream may end up containing less bytes than we've allocated for the buffer.
-         
+
                     // To ensure we only write valid data, slice the buffer from beginning to the last valid byte.
                     let bytes = &buf[0..bytes_read];
                     headers_buffer.extend(bytes);
@@ -225,7 +222,10 @@ impl<T: Read> Request<T> {
             request_target: String::from_utf8(request_target)
                 .expect("Error converting request_target to UTF-8"), // FIXME error_handling
             headers,
-            method: HttpMethod::from_str(from_utf8(&method).expect("HTTP method is not a valid UTF-8 string.")).unwrap(), // FIXME error_handling
+            method: HttpMethod::from_str(
+                from_utf8(&method).expect("HTTP method is not a valid UTF-8 string."),
+            )
+            .unwrap(), // FIXME error_handling
             body: body_buffer,
         }
     }
@@ -246,11 +246,17 @@ impl<T: Read> Request<T> {
                 .content_length
                 .expect("Empty content length")
                 .try_into()
-                .expect("Error converting content-length to u64") // FIXME error_handling
+                .expect("Error converting content-length to u64")
+        // FIXME error_handling
         {
             let mut buf: [u8; 512] = [0; 512];
             match request.stream.read(&mut buf) {
-                Err(e) => { return Err(RequestError { status_code: 500, message: format!("Error reading request body: {}", e)}) },
+                Err(e) => {
+                    return Err(RequestError {
+                        status_code: 500,
+                        message: format!("Error reading request body: {}", e),
+                    });
+                }
                 Ok(bytes_read) => {
                     let bytes = &buf[0..bytes_read];
                     request.body.extend(bytes);
@@ -331,7 +337,7 @@ mod tests {
         let stream = fixtures::create_stream(Some(510));
         let request = Request::from_stream(stream.as_bytes()).unwrap();
         let headers = request.headers;
-        
+
         assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.request_target, "/path?foo=bar");
         assert_eq!(headers.host.unwrap(), "example.com");

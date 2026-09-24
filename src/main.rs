@@ -63,13 +63,12 @@ fn main() {
     start_tcp_listener(
         Arc::new(move |stream: TcpStream| {
             let request = Request::from_stream(stream).unwrap(); // FIXME error_handling
-            println!("{:?}", request.method.clone());
-            println!("{:?}", request.request_target.clone());
-            let handle = threaded_router
-                .registry
-                .get(&(request.method.clone(), request.request_target.clone())) // WHY &?
-                .unwrap();  // FIXME error_handling
-            handle(request);
+            println!(
+                "[Router] [{:?}] {:?}",
+                request.method(),
+                request.request_target()
+            );
+            threaded_router.dispatch(request);
         }),
         None,
         6403,
