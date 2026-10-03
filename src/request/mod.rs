@@ -25,8 +25,7 @@ pub struct Headers {
 }
 
 #[allow(unused)]
-pub struct Request<T: Read> {
-    stream: T,
+pub struct Request {
     request_target: String,
     headers: Headers,
     method: HttpMethod,
@@ -36,18 +35,14 @@ pub struct Request<T: Read> {
 const HTTP_HEADER_TERMINATOR: &[u8; 4] = b"\r\n\r\n";
 
 #[allow(unused)]
-impl<T: Read> Request<T> {
+impl Request {
     /*
        from_stream is the public constructor; it takes a TcpStream
        and calls consume() which reads bytes off the stream and
        parses them into headers, method and body
     */
-    pub fn from_stream(stream: T) -> Result<Self, RequestError> {
+    pub fn from_stream<T: Read>(stream: &mut T) -> Result<Self, RequestError> {
         Request::consume(stream)
-    }
-
-    pub fn stream_ref(&mut self) -> &mut T {
-        &mut self.stream
     }
 
     pub fn request_target(&self) -> &str {
@@ -70,7 +65,7 @@ impl<T: Read> Request<T> {
        new() is a private constructor that reads the full HTTP headers
        into a buffer, as well as any residual bytes that belong to the body.
     */
-    fn new(mut stream: T) -> Request<T> {
+    fn new<T: Read>(stream: &mut T) -> Request {
         // Stores all bytes that belong to the header
         let mut headers_buffer: Vec<u8> = vec![];
 
@@ -218,7 +213,6 @@ impl<T: Read> Request<T> {
         };
 
         Request {
-            stream,
             request_target: String::from_utf8(request_target)
                 .expect("Error converting request_target to UTF-8"), // FIXME error_handling
             headers,
@@ -230,7 +224,7 @@ impl<T: Read> Request<T> {
         }
     }
 
-    fn consume(stream: T) -> Result<Self, RequestError> {
+    fn consume<T: Read>(stream: &mut T) -> Result<Self, RequestError> {
         let mut request = Request::new(stream);
 
         if request.method == HttpMethod::Get {
@@ -250,7 +244,7 @@ impl<T: Read> Request<T> {
         // FIXME error_handling
         {
             let mut buf: [u8; 512] = [0; 512];
-            match request.stream.read(&mut buf) {
+            match stream.read(&mut buf) {
                 Err(e) => {
                     return Err(RequestError {
                         status_code: 500,
@@ -312,7 +306,7 @@ mod tests {
     fn it_parses_request_line_and_header_fields() {
         let stream = fixtures::create_stream(None);
 
-        let request = Request::from_stream(stream.as_bytes()).unwrap();
+        let request = Request::from_stream(&mut stream.as_bytes()).unwrap();
         let headers = request.headers;
 
         assert_eq!(request.method, HttpMethod::Get);
@@ -335,7 +329,7 @@ mod tests {
     #[test]
     fn it_handles_sequential_reads() {
         let stream = fixtures::create_stream(Some(510));
-        let request = Request::from_stream(stream.as_bytes()).unwrap();
+        let request = Request::from_stream(&mut stream.as_bytes()).unwrap();
         let headers = request.headers;
 
         assert_eq!(request.method, HttpMethod::Get);

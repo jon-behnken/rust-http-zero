@@ -6,46 +6,48 @@ use crate::request::Request;
 use crate::router::Router;
 
 /**
- * RequestHandler is a handler function wrapped in an atomic reference counter.
+ * A shared, global handler that closes over a Router and
+ * dispatches requests to registered RouteHandlers.
  *
- * An Arc guarantees that the read and write operations to the reference count
- * are done atomically, thus its safe to share across threads.
+ * A clone of the Dispatcher is moved into every spawned thread,
+ * so wrapping it in an Arc prevents redundant allocation of the
+ * same type.
  */
-type RequestHandler = Arc<dyn Fn(TcpStream) + Send + Sync>;
+type Dispatcher = Arc<dyn Fn(TcpStream) + Send + Sync>;
 
 pub struct ServerOptions {
-    request_handler: RequestHandler,
+    dispatcher: Dispatcher,
     channel_message_sender: Option<Sender<()>>,
 }
 pub struct Server {}
 
 impl Server {
     pub fn start(router: Router, port: u16, options: Option<ServerOptions>) {
-        let request_handler: Arc<dyn Fn(TcpStream) + Send + Sync>;
+        let dispatcher: Dispatcher;
         let mut sender: Option<Sender<()>> = None;
         match options {
             Some(server_options) => {
-                request_handler = server_options.request_handler;
+                dispatcher = server_options.dispatcher;
                 sender = server_options.channel_message_sender;
             }
             None => {
                 // Move Router into a heap allocation with reference counter
                 let threaded_router = Arc::new(router);
-                request_handler = Arc::new(move |stream: TcpStream| {
-                    let request = Request::from_stream(stream).unwrap(); // FIXME error_handling
+                dispatcher = Arc::new(move |mut stream: TcpStream| {
+                    let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
                     println!(
                         "[Router] [{:?}] {:?}",
                         request.method(),
                         request.request_target()
                     );
-                    threaded_router.dispatch(request); // FIXME do I need the threaded one here?
+                    threaded_router.dispatch(request);
                 });
             }
         }
-        Server::start_tcp_listener(request_handler, sender, port);
+        Server::start_tcp_listener(dispatcher, sender, port);
     }
 
-    fn start_tcp_listener(handler: RequestHandler, sender: Option<Sender<()>>, port: u16) {
+    fn start_tcp_listener(dispatcher: Dispatcher, sender: Option<Sender<()>>, port: u16) {
         match TcpListener::bind(format!("127.0.0.1:{port}")) {
             Err(e) => println!("Error binding to port {port}: {:?}", e),
             Ok(tcp_listener) => {
@@ -59,10 +61,11 @@ impl Server {
                     match stream {
                         Err(e) => println!("Error with stream: {:?}", e),
                         Ok(stream) => {
-                            let clone: Arc<dyn Fn(TcpStream) + Send + Sync> = handler.clone();
+                            let threaded_dispatcher: Arc<dyn Fn(TcpStream) + Send + Sync> =
+                                dispatcher.clone();
                             // thread::spawn requires ownership but the closure doesn't know that.
                             // We need to explicitly specify `move` capture mode
-                            thread::spawn(move || clone(stream));
+                            thread::spawn(move || threaded_dispatcher(stream));
                         }
                     }
                 }
@@ -86,7 +89,7 @@ mod test {
     const EXPECTED_DURATION_THRESHOLD_MS: u16 =
         TEST_HANDLER_SLEEP_TIME_MS + THREAD_OVERHEAD_BUFFER_MS;
 
-    fn test_handler(mut stream: TcpStream) {
+    fn test_dispatcher(mut stream: TcpStream) {
         thread::sleep(Duration::from_millis(TEST_HANDLER_SLEEP_TIME_MS.into()));
         stream.write(b"done").unwrap();
     }
@@ -96,7 +99,7 @@ mod test {
         let (sender, receiver) = channel::<()>();
 
         let options = ServerOptions {
-            request_handler: Arc::new(test_handler),
+            dispatcher: Arc::new(test_dispatcher),
             channel_message_sender: Some(sender),
         };
 
