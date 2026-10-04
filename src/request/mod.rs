@@ -86,8 +86,8 @@ impl Request {
             match stream.read(&mut buf) {
                 Err(e) => println!("Error reading into buffer: {:?}", e),
                 Ok(bytes_read) => {
+                    if bytes_read == 0 { panic!() } // FIXME error_handling; propagate socket hangup.
                     // The stream may end up containing less bytes than we've allocated for the buffer.
-
                     // To ensure we only write valid data, slice the buffer from beginning to the last valid byte.
                     let bytes = &buf[0..bytes_read];
                     headers_buffer.extend(bytes);

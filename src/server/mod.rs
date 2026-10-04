@@ -17,33 +17,37 @@ use crate::router::Router;
 type Dispatcher = Arc<dyn Fn(TcpStream) + Send + Sync>;
 
 pub struct ServerOptions {
-    dispatcher: Dispatcher,
+    dispatcher: Option<Dispatcher>,
     channel_message_sender: Option<Sender<()>>,
 }
 pub struct Server {}
 
 impl Server {
     pub fn start(router: Router, port: u16, options: Option<ServerOptions>) {
+        fn create_dispatcher(router: Arc<Router>) -> Dispatcher {
+            Arc::new(move |mut stream: TcpStream| {
+                let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
+                println!(
+                    "[Router] [{:?}] {:?}",
+                    request.method(),
+                    request.request_target()
+                );
+                let response = router.dispatch(request);
+                stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
+            })
+        }
+        let threaded_router = Arc::new(router);
         let dispatcher: Dispatcher;
         let mut sender: Option<Sender<()>> = None;
         match options {
             Some(server_options) => {
-                dispatcher = server_options.dispatcher;
+                dispatcher = server_options
+                    .dispatcher
+                    .unwrap_or(create_dispatcher(threaded_router));
                 sender = server_options.channel_message_sender;
             }
             None => {
-                // Move Router into a heap allocation with reference counter
-                let threaded_router = Arc::new(router);
-                dispatcher = Arc::new(move |mut stream: TcpStream| {
-                    let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
-                    println!(
-                        "[Router] [{:?}] {:?}",
-                        request.method(),
-                        request.request_target()
-                    );
-                    let response = threaded_router.dispatch(request);
-                    stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
-                });
+                dispatcher = create_dispatcher(threaded_router);
             }
         }
         Server::start_tcp_listener(dispatcher, sender, port);
@@ -79,7 +83,7 @@ impl Server {
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
-    use std::net::TcpStream;
+    use std::net::{Shutdown, TcpStream};
     use std::panic;
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
@@ -96,19 +100,45 @@ mod test {
         stream.write(b"done").unwrap();
     }
 
+    // send_request takes ownership of sender and returns a closure which
+    // captures it. The closure outlives the scope of send_request,
+    // which would result in a dangling reference (sender would be dropped).
+    //
+    // This is where Rust requires the `move` keyword -- to force ownership
+    // into the closure.
+    fn send_request(sender: Sender<()>, port: u16, hangup: bool) -> impl FnOnce() {
+        move || {
+            let mut stream = TcpStream::connect(format!("localhost:{}", port))
+                .expect("Error connecting to localhost on port 6113");
+            stream.write(b"ping").expect("Error sending request");
+
+            if hangup {
+                stream.shutdown(Shutdown::Write).unwrap();
+            }
+
+            let mut response = [0; 4];
+            stream.read(&mut response).unwrap();
+            if let Err(e) = sender.send(()) {
+                println!("{:?}", e);
+                panic!()
+            }
+        }
+    }
+
     #[test]
     fn it_handles_requests_concurrently() {
         let (sender, receiver) = channel::<()>();
 
         let options = ServerOptions {
-            dispatcher: Arc::new(test_dispatcher),
+            dispatcher: Some(Arc::new(test_dispatcher)),
             channel_message_sender: Some(sender),
         };
 
         let router = Router::new();
+        let port: u16 = 6113;
 
-        thread::spawn(|| {
-            Server::start(router, 6113, Some(options));
+        thread::spawn(move || {
+            Server::start(router, port, Some(options));
         });
 
         // Start test once server starts up successfully
@@ -118,35 +148,39 @@ mod test {
                 let (sender, receiver) = channel::<()>();
                 let sender_clone = sender.clone();
 
-                // send_request takes ownership of sender and returns a closure which
-                // captures it. The closure outlives the scope of send_request,
-                // which would result in a dangling reference (sender would be dropped).
-                //
-                // This is where Rust requires the `move` keyword -- to force ownership
-                // into the closure.
-                fn send_request(sender: Sender<()>) -> impl FnOnce() {
-                    move || {
-                        let mut stream = TcpStream::connect("localhost:6113")
-                            .expect("Error connecting to localhost on port 6113");
-                        stream.write(b"ping").expect("Error sending request");
-
-                        let mut response = [0; 4];
-                        stream.read(&mut response).unwrap();
-                        if let Err(e) = sender.send(()) {
-                            println!("{:?}", e);
-                            panic!()
-                        }
-                    }
-                }
-
                 let start = Instant::now();
 
-                thread::spawn(send_request(sender));
-                thread::spawn(send_request(sender_clone));
+                thread::spawn(send_request(sender, port, false));
+                thread::spawn(send_request(sender_clone, port, false));
 
                 receiver.recv().and_then(|_| receiver.recv()).unwrap();
                 let duration = start.elapsed();
                 assert!(duration.as_millis() < EXPECTED_DURATION_THRESHOLD_MS.into());
+            }
+        }
+    }
+
+    #[test]
+    fn it_handles_client_disconnect() {
+        let (sender, receiver) = channel::<()>();
+
+        let options = ServerOptions {
+            dispatcher: None, // use real dispatcher
+            channel_message_sender: Some(sender),
+        };
+
+        let router = Router::new();
+        let port: u16 = 6114;
+        thread::spawn(move || {
+            Server::start(router, port, Some(options));
+        });
+
+        match receiver.recv() {
+            Err(e) => println!("Error receiving server started signal: {:?}", e),
+            Ok(_) => {
+                let (sender, receiver) = channel::<()>();
+                thread::spawn(send_request(sender, port, true));
+                receiver.recv_timeout(Duration::new(1, 0)).unwrap();
             }
         }
     }
