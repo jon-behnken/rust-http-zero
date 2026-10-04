@@ -24,7 +24,7 @@ pub struct Server {}
 
 impl Server {
     pub fn start(router: Router, port: u16, options: Option<ServerOptions>) {
-        fn create_dispatcher(router: Arc<Router>) -> Dispatcher {
+        fn create_dispatcher(router: Router) -> Dispatcher {
             Arc::new(move |mut stream: TcpStream| {
                 let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
                 println!(
@@ -36,18 +36,17 @@ impl Server {
                 stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
             })
         }
-        let threaded_router = Arc::new(router);
         let dispatcher: Dispatcher;
         let mut sender: Option<Sender<()>> = None;
         match options {
             Some(server_options) => {
                 dispatcher = server_options
                     .dispatcher
-                    .unwrap_or(create_dispatcher(threaded_router));
+                    .unwrap_or(create_dispatcher(router));
                 sender = server_options.channel_message_sender;
             }
             None => {
-                dispatcher = create_dispatcher(threaded_router);
+                dispatcher = create_dispatcher(router);
             }
         }
         Server::start_tcp_listener(dispatcher, sender, port);
