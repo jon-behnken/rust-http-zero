@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, mpsc::Sender};
 use std::thread;
@@ -40,7 +41,8 @@ impl Server {
                         request.method(),
                         request.request_target()
                     );
-                    threaded_router.dispatch(request);
+                    let response = threaded_router.dispatch(request);
+                    stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
                 });
             }
         }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     request::{Request, http_method::HttpMethod},
-    response::Response,
+    response::{Response, http_status_code::HttpStatusCode},
 };
 
 /* A type aliases for readability */
@@ -43,7 +43,7 @@ impl Router {
             .get(&(method.clone(), request_target.to_string()))
         {
             Some(handler) => handler(&request),
-            None => Response::new(404, vec![]),
+            None => Response::new(HttpStatusCode::NotFound, vec![]),
         }
     }
 
