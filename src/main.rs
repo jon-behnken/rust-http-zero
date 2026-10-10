@@ -11,7 +11,7 @@ fn main() {
     let mut router = Router::new();
     router.get(
         "/foo".to_string(),
-        Box::new(|_| Response::new(HttpStatusCode::Ok, vec![])),
+        Box::new(|_| Response::new(HttpStatusCode::Ok, String::from("hello").into())),
     );
     router.post(
         "/foo".to_string(),

@@ -7,52 +7,42 @@ use crate::request::Request;
 use crate::router::Router;
 
 /**
- * A shared, global handler that closes over a Router and
- * dispatches requests to registered RouteHandlers.
+ * A shared handler that handles the stream.
  *
- * A clone of the Dispatcher is moved into every spawned thread,
- * so wrapping it in an Arc prevents redundant allocation of the
- * same type.
+ * The default handler closes over a Router
+ * and passes the stream into it so it can be
+ * handled by the appropriate route handler.
  */
-type Dispatcher = Arc<dyn Fn(TcpStream) + Send + Sync>;
+type StreamHandler = Arc<dyn Fn(TcpStream) + Send + Sync>;
 
 pub struct ServerOptions {
-    dispatcher: Option<Dispatcher>,
+    stream_handler: Option<StreamHandler>,
     channel_message_sender: Option<Sender<()>>,
 }
 pub struct Server {}
 
 impl Server {
     pub fn start(router: Router, port: u16, options: Option<ServerOptions>) {
-        fn create_dispatcher(router: Router) -> Dispatcher {
-            Arc::new(move |mut stream: TcpStream| {
-                let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
-                println!(
-                    "[Router] [{:?}] {:?}",
-                    request.method(),
-                    request.request_target()
-                );
-                let response = router.dispatch(request);
-                stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
-            })
-        }
-        let dispatcher: Dispatcher;
+        let stream_handler: StreamHandler;
         let mut sender: Option<Sender<()>> = None;
         match options {
             Some(server_options) => {
-                dispatcher = server_options
-                    .dispatcher
-                    .unwrap_or(create_dispatcher(router));
+                stream_handler = server_options
+                    .stream_handler
+                    .unwrap_or(Self::create_stream_handler(router));
                 sender = server_options.channel_message_sender;
             }
             None => {
-                dispatcher = create_dispatcher(router);
+                stream_handler = Self::create_stream_handler(router);
             }
         }
-        Server::start_tcp_listener(dispatcher, sender, port);
+        Server::bind(stream_handler, sender, port);
     }
 
-    fn start_tcp_listener(dispatcher: Dispatcher, sender: Option<Sender<()>>, port: u16) {
+    // Bind to a port and spawn threads to handle incoming connections.
+    // Each thread clones the Dispatcher, which is an Arc-wrapped function
+    // that routes the stream to the proper route handler
+    fn bind(stream_handler: StreamHandler, sender: Option<Sender<()>>, port: u16) {
         match TcpListener::bind(format!("127.0.0.1:{port}")) {
             Err(e) => println!("Error binding to port {port}: {:?}", e),
             Ok(tcp_listener) => {
@@ -66,16 +56,28 @@ impl Server {
                     match stream {
                         Err(e) => println!("Error with stream: {:?}", e),
                         Ok(stream) => {
-                            let threaded_dispatcher: Arc<dyn Fn(TcpStream) + Send + Sync> =
-                                dispatcher.clone();
+                            let threaded_stream_handler = stream_handler.clone();
                             // thread::spawn requires ownership but the closure doesn't know that.
                             // We need to explicitly specify `move` capture mode
-                            thread::spawn(move || threaded_dispatcher(stream));
+                            thread::spawn(move || threaded_stream_handler(stream));
                         }
                     }
                 }
             }
         };
+    }
+
+    fn create_stream_handler(router: Router) -> StreamHandler {
+        Arc::new(move |mut stream: TcpStream| {
+            let request = Request::from_stream(&mut stream).unwrap(); // FIXME error_handling
+            println!(
+                "[Router] [{:?}] {:?}",
+                request.method(),
+                request.request_target()
+            );
+            let response = router.dispatch(request);
+            stream.write_all(&response.to_bytes()).unwrap(); //FIXME error_handling
+        })
     }
 }
 
@@ -94,7 +96,7 @@ mod test {
     const EXPECTED_DURATION_THRESHOLD_MS: u16 =
         TEST_HANDLER_SLEEP_TIME_MS + THREAD_OVERHEAD_BUFFER_MS;
 
-    fn test_dispatcher(mut stream: TcpStream) {
+    fn test_stream_handler(mut stream: TcpStream) {
         thread::sleep(Duration::from_millis(TEST_HANDLER_SLEEP_TIME_MS.into()));
         stream.write(b"done").unwrap();
     }
@@ -129,7 +131,7 @@ mod test {
         let (sender, receiver) = channel::<()>();
 
         let options = ServerOptions {
-            dispatcher: Some(Arc::new(test_dispatcher)),
+            stream_handler: Some(Arc::new(test_stream_handler)),
             channel_message_sender: Some(sender),
         };
 
@@ -164,7 +166,7 @@ mod test {
         let (sender, receiver) = channel::<()>();
 
         let options = ServerOptions {
-            dispatcher: None, // use real dispatcher
+            stream_handler: None, // use real dispatcher
             channel_message_sender: Some(sender),
         };
 
